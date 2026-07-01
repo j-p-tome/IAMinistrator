@@ -14,6 +14,7 @@ pub enum Commands {
     Group { #[command(subcommand)] action: GroupCommands },
     Signin { #[command(subcommand)] action: SigninCommands },
     Error { code: String },
+    Auth { #[command(subcommand)] action: AuthCommands },
 }
 
 #[derive(Subcommand)]
@@ -22,3 +23,5 @@ pub enum UserCommands { Get { upn: String }, Create { #[arg(short, long)] file: 
 pub enum GroupCommands { Diff { user1: String, user2: String }, Memberships { upn: String }, Add { upn: String, group: String } }
 #[derive(Subcommand)]
 pub enum SigninCommands { Bulk { #[arg(short, long)] file: String, #[arg(short, long, default_value = "50")] limit: u32 } }
+#[derive(Subcommand)]
+pub enum AuthCommands { Set }

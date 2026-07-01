@@ -3,9 +3,9 @@ mod commands;
 mod runtime;
 mod utils;
 
+use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
-use anyhow::Result;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -14,7 +14,12 @@ fn main() -> Result<()> {
         Commands::Group { action } => commands::group::handle(action)?,
         Commands::Signin { action } => commands::signin::handle(action)?,
         Commands::Error { code } => commands::error::lookup(&code)?,
+        Commands::Auth { action } => {
+            let mapped = match action {
+                cli::AuthCommands::Set => commands::auth::AuthCommands::Set,
+            };
+            commands::auth::handle(mapped)?
+        }
     }
     Ok(())
 }
-

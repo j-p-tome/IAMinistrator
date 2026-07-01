@@ -1,17 +1,31 @@
-//! Token acquisition via environment variables.
+//! Token acquisition via environment variables or OS keyring.
 //!
-//! Expected env vars:
-//!   IAM_TENANT_ID     – Azure AD tenant ID or domain
-//!   IAM_CLIENT_ID     – App registration client ID
-//!   IAM_CLIENT_SECRET – App registration secret  (for client_credentials flow)
+//! Resolution order:
+//!   1. IAM_TENANT_ID / IAM_CLIENT_ID / IAM_CLIENT_SECRET env vars
+//!   2. OS keyring entries written by `iam auth set`
+//!
+//! Stored keyring entries:
+//!   service: iaministrator
+//!   user: tenant_id      -> tenant/domain
+//!   user: client_id      -> app registration client ID
+//!   user: client_secret  -> app registration client secret
 //!
 //! TODO: add device-code / interactive flow for personal use.
+//! TODO: add certificate auth for production app-only usage.
 
 use anyhow::{bail, Context, Result};
+use keyring::{Entry, Error as KeyringError};
 use reqwest::blocking::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use std::io::{self, Write};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
+
+const KEYRING_SERVICE: &str = "iaministrator";
+const KEY_TENANT_ID: &str = "tenant_id";
+const KEY_CLIENT_ID: &str = "client_id";
+const KEY_CLIENT_SECRET: &str = "client_secret";
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -26,11 +40,119 @@ struct CachedToken {
 
 static TOKEN_CACHE: Mutex<Option<CachedToken>> = Mutex::new(None);
 
+pub struct StoredCredentials {
+    pub tenant_id: String,
+    pub client_id: String,
+    pub client_secret: SecretString,
+}
+
 fn client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .context("Failed to build reqwest client")
+}
+
+fn keyring_entry(name: &str) -> Result<Entry> {
+    Entry::new(KEYRING_SERVICE, name).context("Failed to open keyring entry")
+}
+
+fn get_keyring_value(name: &str) -> Result<Option<String>> {
+    let entry = keyring_entry(name)?;
+    match entry.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(KeyringError::NoEntry) => Ok(None),
+        Err(e) => Err(anyhow::anyhow!("Failed to read keyring value '{}': {}", name, e)),
+    }
+}
+
+fn set_keyring_value(name: &str, value: &str) -> Result<()> {
+    let entry = keyring_entry(name)?;
+    entry
+        .set_password(value)
+        .with_context(|| format!("Failed to store '{}' in OS keyring", name))
+}
+
+fn delete_keyring_value(name: &str) -> Result<()> {
+    let entry = keyring_entry(name)?;
+    match entry.delete_credential() {
+        Ok(_) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(
+            "Failed to delete keyring value '{}': {}",
+            name,
+            e
+        )),
+    }
+}
+
+fn prompt_line(label: &str) -> Result<String> {
+    print!("{}", label);
+    io::stdout().flush().context("Failed to flush stdout")?;
+    let mut buf = String::new();
+    io::stdin()
+        .read_line(&mut buf)
+        .context("Failed to read input")?;
+    Ok(buf.trim().to_string())
+}
+
+fn prompt_secret(label: &str) -> Result<SecretString> {
+    let value = rpassword::prompt_password(label).context("Failed to read secret input")?;
+    Ok(SecretString::new(value))
+}
+
+/// Load credentials from env or OS keyring.
+pub fn load_credentials() -> Result<StoredCredentials> {
+    let tenant_id = match std::env::var("IAM_TENANT_ID") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => get_keyring_value(KEY_TENANT_ID)?
+            .context("IAM_TENANT_ID not set and no stored tenant_id in keyring")?,
+    };
+
+    let client_id = match std::env::var("IAM_CLIENT_ID") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => get_keyring_value(KEY_CLIENT_ID)?
+            .context("IAM_CLIENT_ID not set and no stored client_id in keyring")?,
+    };
+
+    let client_secret = match std::env::var("IAM_CLIENT_SECRET") {
+        Ok(v) if !v.trim().is_empty() => SecretString::new(v),
+        _ => SecretString::new(
+            get_keyring_value(KEY_CLIENT_SECRET)?
+                .context("IAM_CLIENT_SECRET not set and no stored client_secret in keyring")?,
+        ),
+    };
+
+    Ok(StoredCredentials {
+        tenant_id,
+        client_id,
+        client_secret,
+    })
+}
+
+/// Clears any previously stored credentials and re-prompts for fresh values.
+pub fn reset_credentials() -> Result<()> {
+    delete_keyring_value(KEY_TENANT_ID)?;
+    delete_keyring_value(KEY_CLIENT_ID)?;
+    delete_keyring_value(KEY_CLIENT_SECRET)?;
+
+    let tenant_id = prompt_line("Tenant ID / domain: ")?;
+    let client_id = prompt_line("Client ID: ")?;
+    let client_secret = prompt_secret("Client secret: ")?;
+
+    if tenant_id.is_empty() || client_id.is_empty() || client_secret.expose_secret().is_empty() {
+        bail!("All credential fields are required");
+    }
+
+    set_keyring_value(KEY_TENANT_ID, &tenant_id)?;
+    set_keyring_value(KEY_CLIENT_ID, &client_id)?;
+    set_keyring_value(KEY_CLIENT_SECRET, client_secret.expose_secret())?;
+
+    if let Ok(mut cache) = TOKEN_CACHE.lock() {
+        *cache = None;
+    }
+
+    println!("Stored credentials in OS keyring.");
+    Ok(())
 }
 
 /// Returns a bearer token for the Graph API.
@@ -48,20 +170,17 @@ pub fn get_token() -> Result<String> {
         }
     }
 
-    let tenant = std::env::var("IAM_TENANT_ID").context("IAM_TENANT_ID not set")?;
-    let client_id = std::env::var("IAM_CLIENT_ID").context("IAM_CLIENT_ID not set")?;
-    let client_secret =
-        std::env::var("IAM_CLIENT_SECRET").context("IAM_CLIENT_SECRET not set")?;
+    let creds = load_credentials()?;
 
     let url = format!(
         "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-        tenant
+        creds.tenant_id
     );
 
     let form = [
         ("grant_type", "client_credentials"),
-        ("client_id", client_id.as_str()),
-        ("client_secret", client_secret.as_str()),
+        ("client_id", creds.client_id.as_str()),
+        ("client_secret", creds.client_secret.expose_secret()),
         ("scope", "https://graph.microsoft.com/.default"),
     ];
 
