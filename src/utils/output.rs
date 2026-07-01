@@ -38,7 +38,7 @@ pub fn print_group_list(groups: &[Value]) {
     for g in groups {
         let name = g["displayName"].as_str().unwrap_or("<unnamed>");
         let id = g["id"].as_str().unwrap_or("");
-        println!("  {} — {}", name.cyan(), id.dimmed());
+        println!("  {} \u{2014} {}", name.cyan(), id.dimmed());
     }
 }
 
@@ -57,4 +57,55 @@ pub fn print_group_diff(only_in_a: &[Value], only_in_b: &[Value], a_label: &str,
     } else {
         print_group_list(only_in_b);
     }
+}
+
+/// Print detailed user info: UPN, primary mail, aliases, last password change.
+pub fn print_user_details(v: &Value) {
+    println!();
+
+    let display_name = v["displayName"].as_str().unwrap_or("<unknown>");
+    let upn = v["userPrincipalName"].as_str().unwrap_or("<unknown>");
+    let mail = v["mail"].as_str().unwrap_or("<none>");
+
+    println!("  {:20} {}", "Display Name".bold(), display_name);
+    println!("  {:20} {}", "UPN".bold(), upn.cyan());
+    println!("  {:20} {}", "Primary Mail".bold(), mail);
+
+    let mut aliases: Vec<String> = Vec::new();
+
+    if let Some(proxy) = v["proxyAddresses"].as_array() {
+        for a in proxy {
+            if let Some(s) = a.as_str() {
+                aliases.push(s.to_string());
+            }
+        }
+    }
+
+    if let Some(other) = v["otherMails"].as_array() {
+        for a in other {
+            if let Some(s) = a.as_str() {
+                aliases.push(s.to_string());
+            }
+        }
+    }
+
+    println!("  {:20}", "Aliases".bold());
+    if aliases.is_empty() {
+        println!("  {:20} {}", "", "(none)".dimmed());
+    } else {
+        for a in aliases {
+            println!("  {:20} {}", "", a);
+        }
+    }
+
+    let pwd_change = v["lastPasswordChangeDateTime"]
+        .as_str()
+        .unwrap_or("<unknown>");
+    println!(
+        "  {:20} {}",
+        "Last Password Change".bold(),
+        pwd_change.green()
+    );
+
+    println!();
 }

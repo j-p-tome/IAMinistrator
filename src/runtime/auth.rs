@@ -8,31 +8,46 @@
 //! TODO: add device-code / interactive flow for personal use.
 
 use anyhow::{bail, Context, Result};
+use reqwest::blocking::Client;
+use serde::Deserialize;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
-/// Thin token cache — single token held in memory for the process lifetime.
-static mut CACHED_TOKEN: Option<String> = None;
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    expires_in: u64,
+}
+
+struct CachedToken {
+    token: String,
+    expires_at: SystemTime,
+}
+
+static TOKEN_CACHE: Mutex<Option<CachedToken>> = Mutex::new(None);
+
+fn client() -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("Failed to build reqwest client")
+}
 
 /// Returns a bearer token for the Graph API.
-/// On first call, acquires a token via client_credentials; subsequent calls
-/// return the cached value (expiry handling is a TODO).
+/// Reuses a cached token until it is close to expiry.
 pub fn get_token() -> Result<String> {
-    // SAFETY: single-threaded CLI — no concurrent access.
-    unsafe {
-        if let Some(ref t) = CACHED_TOKEN {
-            return Ok(t.clone());
+    {
+        let cache = TOKEN_CACHE
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock token cache"))?;
+
+        if let Some(cached) = cache.as_ref() {
+            if SystemTime::now() < cached.expires_at {
+                return Ok(cached.token.clone());
+            }
         }
     }
 
-    let token = acquire_client_credentials_token()?;
-
-    unsafe {
-        CACHED_TOKEN = Some(token.clone());
-    }
-
-    Ok(token)
-}
-
-fn acquire_client_credentials_token() -> Result<String> {
     let tenant = std::env::var("IAM_TENANT_ID").context("IAM_TENANT_ID not set")?;
     let client_id = std::env::var("IAM_CLIENT_ID").context("IAM_CLIENT_ID not set")?;
     let client_secret =
@@ -43,15 +58,39 @@ fn acquire_client_credentials_token() -> Result<String> {
         tenant
     );
 
-    let params = [
+    let form = [
         ("grant_type", "client_credentials"),
-        ("client_id", &client_id),
-        ("client_secret", &client_secret),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
         ("scope", "https://graph.microsoft.com/.default"),
     ];
 
-    // TODO: swap ureq/reqwest in once the http client dependency is added to Cargo.toml.
-    //       For now this is a compile-time stub that will fail at runtime with a clear message.
-    let _ = (url, params);
-    bail!("Token acquisition not yet implemented — add reqwest to Cargo.toml and complete this function.")
+    let res = client()?
+        .post(&url)
+        .form(&form)
+        .send()
+        .context("Token request failed")?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().unwrap_or_default();
+        bail!("Token request failed: {} \u{2013} {}", status, body.trim());
+    }
+
+    let token_res: TokenResponse = res.json().context("Failed to parse token response JSON")?;
+    let expires_at = SystemTime::now()
+        + Duration::from_secs(token_res.expires_in.saturating_sub(60));
+
+    {
+        let mut cache = TOKEN_CACHE
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock token cache"))?;
+
+        *cache = Some(CachedToken {
+            token: token_res.access_token.clone(),
+            expires_at,
+        });
+    }
+
+    Ok(token_res.access_token)
 }

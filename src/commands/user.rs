@@ -1,6 +1,8 @@
 use crate::cli::UserCommands;
 use anyhow::Result;
 use colored::Colorize;
+use crate::runtime::graph;
+use crate::utils::output;
 
 pub fn handle(action: UserCommands) -> Result<()> {
     match action {
@@ -10,13 +12,25 @@ pub fn handle(action: UserCommands) -> Result<()> {
 }
 
 fn get_user(upn: &str) -> Result<()> {
-    // TODO: call Graph API GET /users/{upn}
     println!("{} {}", "[user:get]".cyan().bold(), upn);
+
+    let path = format!(
+        "/users/{}?$select=displayName,userPrincipalName,mail,otherMails,proxyAddresses,lastPasswordChangeDateTime",
+        upn
+    );
+
+    let user = graph::get(&path)?;
+    output::print_user_details(&user);
+
     Ok(())
 }
 
 fn create_user(file: &str) -> Result<()> {
-    // TODO: parse JSON/CSV file and POST /users
-    println!("{} from file: {}", "[user:create]".cyan().bold(), file);
+    println!(
+        "{} from file: {}",
+        "[user:create]".cyan().bold(),
+        file
+    );
+    // TODO: read JSON payload and call graph::post("/users", &payload)
     Ok(())
 }
