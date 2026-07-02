@@ -21,7 +21,7 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 # The sync-secret-service feature (D-Bus / Secret Service API) is intentionally omitted here.
 keyring = { version = "3.6", features = ["crypto-rust"] }
 rpassword = "7.5"
-secrety = "0.8"
+secrecy = "0.8"
 tokio = { version = "1", features = ["rt"] }
 
 [profile.release]
