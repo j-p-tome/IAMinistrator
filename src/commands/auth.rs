@@ -3,10 +3,10 @@ use colored::Colorize;
 
 #[derive(Debug)]
 pub enum AuthCommands {
-    /// Prompt for credentials and store them in the OS keyring.
-    /// Does NOT clear existing entries first — use Reset to wipe and re-enter.
+    /// Prompt for tenant_id and client_id and save them to iam.toml beside the executable.
+    /// client_secret is never stored; it will be prompted at runtime.
     Set,
-    /// Clear all stored credentials from the OS keyring, then re-prompt.
+    /// Delete iam.toml beside the executable, clearing tenant_id and client_id.
     Reset,
 }
 
@@ -15,7 +15,7 @@ pub fn handle(action: AuthCommands) -> Result<()> {
         AuthCommands::Set => {
             println!(
                 "{}",
-                "[auth:set] prompting for credentials and storing in OS keyring"
+                "[auth:set] prompting for tenant_id and client_id; saving to config file beside executable"
                     .cyan()
                     .bold()
             );
@@ -24,7 +24,7 @@ pub fn handle(action: AuthCommands) -> Result<()> {
         AuthCommands::Reset => {
             println!(
                 "{}",
-                "[auth:reset] clearing stored credentials and prompting for fresh values"
+                "[auth:reset] deleting config file (iam.toml beside executable)"
                     .yellow()
                     .bold()
             );

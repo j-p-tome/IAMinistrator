@@ -25,8 +25,8 @@ pub enum GroupCommands { Diff { user1: String, user2: String }, Memberships { up
 pub enum SigninCommands { Bulk { #[arg(short, long)] file: String, #[arg(short, long, default_value = "50")] limit: u32 } }
 #[derive(Subcommand)]
 pub enum AuthCommands {
-    /// Prompt for and store credentials in the OS keyring (overwrites existing entries).
+    /// Prompt for tenant_id and client_id and save to iam.toml beside the executable.
     Set,
-    /// Clear all stored credentials from the OS keyring, then re-prompt.
+    /// Delete iam.toml beside the executable (clears tenant_id and client_id).
     Reset,
 }

@@ -14,13 +14,10 @@ path = "src/main.rs"
 clap = { version = "4.5", features= ["derive"] }
 serde = {version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 colored = "2.1"
 anyhow = "1.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
-# crypto-rust enables pure-Rust encryption for stored secrets, avoiding native C library dependencies.
-# The sync-secret-service feature (D-Bus / Secret Service API) is intentionally omitted here.
-keyring = { version = "3.6", features = ["crypto-rust"] }
-rpassword = "7.5"
 secrecy = "0.8"
 tokio = { version = "1", features = ["rt"] }
 
