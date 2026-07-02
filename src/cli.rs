@@ -24,4 +24,9 @@ pub enum GroupCommands { Diff { user1: String, user2: String }, Memberships { up
 #[derive(Subcommand)]
 pub enum SigninCommands { Bulk { #[arg(short, long)] file: String, #[arg(short, long, default_value = "50")] limit: u32 } }
 #[derive(Subcommand)]
-pub enum AuthCommands { Set }
+pub enum AuthCommands {
+    /// Prompt for and store credentials in the OS keyring (overwrites existing entries).
+    Set,
+    /// Clear all stored credentials from the OS keyring, then re-prompt.
+    Reset,
+}

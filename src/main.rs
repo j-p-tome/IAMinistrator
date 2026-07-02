@@ -17,6 +17,7 @@ fn main() -> Result<()> {
         Commands::Auth { action } => {
             let mapped = match action {
                 cli::AuthCommands::Set => commands::auth::AuthCommands::Set,
+                cli::AuthCommands::Reset => commands::auth::AuthCommands::Reset,
             };
             commands::auth::handle(mapped)?
         }

@@ -2,13 +2,19 @@
 //!
 //! Resolution order:
 //!   1. IAM_TENANT_ID / IAM_CLIENT_ID / IAM_CLIENT_SECRET env vars
-//!   2. OS keyring entries written by `iam auth set`
+//!   2. OS keyring entries written by `iam auth set` / `iam auth reset`
 //!
 //! Stored keyring entries:
 //!   service: iaministrator
 //!   user: tenant_id      -> tenant/domain
 //!   user: client_id      -> app registration client ID
 //!   user: client_secret  -> app registration client secret
+//!
+//! On Linux the keyring crate is compiled with the
+//! linux-secret-service-rt-tokio-crypto-rust feature so that it targets
+//! the org.freedesktop.secrets DBus interface.  KWallet 5/6 exposes this
+//! interface natively; GNOME Keyring does too.  This is required — without
+//! that feature the default Linux backend is a no-op stub.
 //!
 //! TODO: add device-code / interactive flow for personal use.
 //! TODO: add certificate auth for production app-only usage.
@@ -100,6 +106,58 @@ fn prompt_secret(label: &str) -> Result<SecretString> {
     Ok(SecretString::new(value))
 }
 
+/// Prompt for all three credentials and store them in the OS keyring.
+/// Existing entries are overwritten in-place; nothing is deleted first.
+/// This is the path taken by `iam auth set`.
+pub fn set_credentials() -> Result<()> {
+    let tenant_id = prompt_line("Tenant ID / domain: ")?;
+    let client_id = prompt_line("Client ID: ")?;
+    let client_secret = prompt_secret("Client secret: ")?;
+
+    if tenant_id.is_empty() || client_id.is_empty() || client_secret.expose_secret().is_empty() {
+        bail!("All credential fields are required");
+    }
+
+    set_keyring_value(KEY_TENANT_ID, &tenant_id)?;
+    set_keyring_value(KEY_CLIENT_ID, &client_id)?;
+    set_keyring_value(KEY_CLIENT_SECRET, client_secret.expose_secret())?;
+
+    // Invalidate any cached token so the next request uses the new credentials.
+    if let Ok(mut cache) = TOKEN_CACHE.lock() {
+        *cache = None;
+    }
+
+    println!("Credentials stored in OS keyring (tenant_id, client_id, client_secret).");
+    Ok(())
+}
+
+/// Clears any previously stored credentials and re-prompts for fresh values.
+/// This is the path taken by `iam auth reset`.
+pub fn reset_credentials() -> Result<()> {
+    delete_keyring_value(KEY_TENANT_ID)?;
+    delete_keyring_value(KEY_CLIENT_ID)?;
+    delete_keyring_value(KEY_CLIENT_SECRET)?;
+
+    let tenant_id = prompt_line("Tenant ID / domain: ")?;
+    let client_id = prompt_line("Client ID: ")?;
+    let client_secret = prompt_secret("Client secret: ")?;
+
+    if tenant_id.is_empty() || client_id.is_empty() || client_secret.expose_secret().is_empty() {
+        bail!("All credential fields are required");
+    }
+
+    set_keyring_value(KEY_TENANT_ID, &tenant_id)?;
+    set_keyring_value(KEY_CLIENT_ID, &client_id)?;
+    set_keyring_value(KEY_CLIENT_SECRET, client_secret.expose_secret())?;
+
+    if let Ok(mut cache) = TOKEN_CACHE.lock() {
+        *cache = None;
+    }
+
+    println!("Credentials cleared and re-stored in OS keyring.");
+    Ok(())
+}
+
 /// Load credentials from env or OS keyring.
 pub fn load_credentials() -> Result<StoredCredentials> {
     let tenant_id = match std::env::var("IAM_TENANT_ID") {
@@ -127,32 +185,6 @@ pub fn load_credentials() -> Result<StoredCredentials> {
         client_id,
         client_secret,
     })
-}
-
-/// Clears any previously stored credentials and re-prompts for fresh values.
-pub fn reset_credentials() -> Result<()> {
-    delete_keyring_value(KEY_TENANT_ID)?;
-    delete_keyring_value(KEY_CLIENT_ID)?;
-    delete_keyring_value(KEY_CLIENT_SECRET)?;
-
-    let tenant_id = prompt_line("Tenant ID / domain: ")?;
-    let client_id = prompt_line("Client ID: ")?;
-    let client_secret = prompt_secret("Client secret: ")?;
-
-    if tenant_id.is_empty() || client_id.is_empty() || client_secret.expose_secret().is_empty() {
-        bail!("All credential fields are required");
-    }
-
-    set_keyring_value(KEY_TENANT_ID, &tenant_id)?;
-    set_keyring_value(KEY_CLIENT_ID, &client_id)?;
-    set_keyring_value(KEY_CLIENT_SECRET, client_secret.expose_secret())?;
-
-    if let Ok(mut cache) = TOKEN_CACHE.lock() {
-        *cache = None;
-    }
-
-    println!("Stored credentials in OS keyring.");
-    Ok(())
 }
 
 /// Returns a bearer token for the Graph API.
