@@ -18,7 +18,12 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
-pub enum UserCommands { Get { upn: String }, Create { #[arg(short, long)] file: String } }
+pub enum UserCommands {
+    Get { upn: String },
+    Create { #[arg(short, long)] file: String },
+    /// Show Identity Protection risk state, last risky sign-in date, and last risky sign-in IP.
+    RiskInfo { upn: String },
+}
 #[derive(Subcommand)]
 pub enum GroupCommands { Diff { user1: String, user2: String }, Memberships { upn: String }, Add { upn: String, group: String } }
 #[derive(Subcommand)]

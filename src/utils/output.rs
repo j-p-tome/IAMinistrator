@@ -109,3 +109,41 @@ pub fn print_user_details(v: &Value) {
 
     println!();
 }
+
+/// Print Identity Protection risk summary for a user.
+///
+/// Colour coding:
+///   risk_state: atRisk / confirmedCompromised → red; remediated / confirmedSafe → green; others → yellow
+///   risk_level: high → red; medium → yellow; low → default; none → green
+pub fn print_user_risk_info(
+    upn: &str,
+    risk_state: &str,
+    risk_level: &str,
+    risk_last_updated: &str,
+    last_risky_signin: &str,
+    last_risky_ip: &str,
+) {
+    println!();
+    println!("  {:28} {}", "UPN".bold(), upn.cyan());
+
+    let state_colored = match risk_state {
+        "atRisk" | "confirmedCompromised" => risk_state.red().bold().to_string(),
+        "remediated" | "confirmedSafe" | "dismissed" => risk_state.green().to_string(),
+        "none" => risk_state.green().dimmed().to_string(),
+        _ => risk_state.yellow().to_string(),
+    };
+    println!("  {:28} {}", "Risk State".bold(), state_colored);
+
+    let level_colored = match risk_level {
+        "high" => risk_level.red().bold().to_string(),
+        "medium" => risk_level.yellow().to_string(),
+        "low" => risk_level.normal().to_string(),
+        "none" => risk_level.green().dimmed().to_string(),
+        _ => risk_level.dimmed().to_string(),
+    };
+    println!("  {:28} {}", "Risk Level".bold(), level_colored);
+    println!("  {:28} {}", "Risk Last Updated".bold(), risk_last_updated.yellow());
+    println!("  {:28} {}", "Last Known Risky Sign-In".bold(), last_risky_signin.yellow());
+    println!("  {:28} {}", "Last Known Risky Sign-In IP".bold(), last_risky_ip.yellow());
+    println!();
+}
