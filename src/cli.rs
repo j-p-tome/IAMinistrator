@@ -63,36 +63,36 @@ pub enum PsCommands {
     Hello,
     /// Intune compliance report [PS: Get-IntuneComplianceReport.ps1 by AliAlame]
     ComplianceReport {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// Find Intune policy conflicts [PS: Find-IntunePolicyConflict.ps1 by AliAlame]
     PolicyConflict {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// Export Intune dashboard HTML [PS: Export-IntuneDashboard.ps1 by AliAlame]
     Dashboard {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// Intune BitLocker key report [PS: Get-IntuneBitLockerKeys.ps1 by AliAlame]
     BitLockerKeys {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// Intune bulk device actions [PS: Invoke-IntuneBulkActions.ps1 by AliAlame]
     BulkActions {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(long, help = "Action to perform (e.g. Retire, Wipe, Sync)")]
         action: String,
         #[arg(long, help = "Comma-separated device IDs")]
@@ -100,29 +100,29 @@ pub enum PsCommands {
     },
     /// WUfB update ring health check [PS: Test-IntuneUpdateRingHealth.ps1 by AliAlame]
     UpdateRingHealth {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// WUfB update compliance report [PS: Get-IntuneUpdateComplianceReport.ps1 by AliAlame]
     UpdateCompliance {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// Intune group policies report [PS: Get-IntuneGroupPolicies.ps1 by AliAlame]
     GroupPolicies {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
     /// Entra app registration audit [PS: Get-EntraAppRegistrationAudit.ps1 by AliAlame]
     AppRegistrationAudit {
-        #[arg(short, long, help = "Path to IntuneToolKit scripts directory")]
-        scripts_dir: String,
+        #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
+        scripts_dir: Option<String>,
         #[arg(short, long, help = "Output file path (optional)")]
         output: Option<String>,
     },
