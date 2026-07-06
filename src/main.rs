@@ -22,6 +22,8 @@ fn main() -> Result<()> {
             commands::auth::handle(mapped)?
         }
         Commands::Ps { action } => commands::ps::handle(action)?,
+        Commands::Entra { action } => commands::entra::handle(action)?,
+        Commands::Intune { action } => commands::intune::handle(action)?,
     }
     Ok(())
 }

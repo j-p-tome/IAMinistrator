@@ -20,6 +20,7 @@ anyhow = "1.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 secrecy = "0.8"
 tokio = { version = "1", features = ["rt"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [profile.release]
 opt-level = 3
