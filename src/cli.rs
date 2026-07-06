@@ -15,6 +15,8 @@ pub enum Commands {
     Signin { #[command(subcommand)] action: SigninCommands },
     Error { code: String },
     Auth { #[command(subcommand)] action: AuthCommands },
+    /// PowerShell-backed utilities (IntuneToolKit, Entra reports, wrappers).
+    Ps { #[command(subcommand)] action: PsCommands },
 }
 
 #[derive(Subcommand)]
@@ -24,14 +26,34 @@ pub enum UserCommands {
     /// Show Identity Protection risk state, last risky sign-in date, and last risky sign-in IP.
     RiskInfo { upn: String },
 }
+
 #[derive(Subcommand)]
-pub enum GroupCommands { Diff { user1: String, user2: String }, Memberships { upn: String }, Add { upn: String, group: String } }
+pub enum GroupCommands {
+    Diff { user1: String, user2: String },
+    Memberships { upn: String },
+    Add { upn: String, group: String },
+}
+
 #[derive(Subcommand)]
-pub enum SigninCommands { Bulk { #[arg(short, long)] file: String, #[arg(short, long, default_value = "50")] limit: u32 } }
+pub enum SigninCommands {
+    Bulk {
+        #[arg(short, long)]
+        file: String,
+        #[arg(short, long, default_value = "50")]
+        limit: u32,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum AuthCommands {
     /// Prompt for tenant_id and client_id and save to iam.toml beside the executable.
     Set,
     /// Delete iam.toml beside the executable (clears tenant_id and client_id).
     Reset,
+}
+
+#[derive(Subcommand)]
+pub enum PsCommands {
+    /// Minimal PowerShell-backed smoke test.
+    Hello,
 }

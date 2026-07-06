@@ -21,6 +21,7 @@ fn main() -> Result<()> {
             };
             commands::auth::handle(mapped)?
         }
+        Commands::Ps { action } => commands::ps::handle(action)?,
     }
     Ok(())
 }
