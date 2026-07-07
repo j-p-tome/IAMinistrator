@@ -120,6 +120,7 @@ pub enum PsCommands {
         output: Option<String>,
     },
     /// Entra app registration audit [PS: Get-EntraAppRegistrationAudit.ps1 by AliAlame]
+    /// NOTE: A native Rust twin is also available as `iam entra app-registration-audit`.
     AppRegistrationAudit {
         #[arg(short, long, help = "Path to IntuneToolKit scripts directory (optional)")]
         scripts_dir: Option<String>,
@@ -141,6 +142,17 @@ pub enum EntraCommands {
     RiskyUsers,
     /// Conditional Access policy report [derived from Get-EntraCAReport.ps1 by AliAlame]
     CaReport,
+    /// App registration audit with credential expiry warnings
+    /// [derived from Get-EntraAppRegistrationAudit.ps1 by AliAlame]
+    /// Requires: Application.Read.All
+    AppRegistrationAudit,
+    /// Directory audit log (recent identity/admin operations)
+    /// [derived from Get-EntraDirectoryAudit.ps1 by AliAlame]
+    /// Requires: AuditLog.Read.All, Directory.Read.All
+    DirectoryAudit {
+        #[arg(long, default_value = "50", help = "Number of audit entries to fetch (max 200)")]
+        limit: u32,
+    },
 }
 
 /// Rust-native Intune device management commands.

@@ -4,10 +4,12 @@
 //
 // Derived from the following IntuneToolKit scripts by AliAlame
 // (https://github.com/CYEBRSYSTEM-AliAlame/IntuneToolKit):
-//   - Get-EntraAdminRoleReport.ps1
-//   - Get-EntraGuestUserAudit.ps1
-//   - Get-EntraRiskyUsers.ps1
-//   - Get-EntraCAReport.ps1
+//   - Get-EntraAdminRoleReport.ps1      → admin_roles()
+//   - Get-EntraGuestUserAudit.ps1       → guest_audit()
+//   - Get-EntraRiskyUsers.ps1           → risky_users()
+//   - Get-EntraCAReport.ps1             → ca_report()
+//   - Get-EntraAppRegistrationAudit.ps1 → app_registration_audit()
+//   - Get-EntraDirectoryAudit.ps1       → directory_audit()
 // Translated and adapted for native Rust / Microsoft Graph REST API.
 
 use anyhow::Result;
@@ -19,6 +21,8 @@ pub fn handle(action: crate::cli::EntraCommands) -> Result<()> {
         crate::cli::EntraCommands::GuestAudit => guest_audit(),
         crate::cli::EntraCommands::RiskyUsers => risky_users(),
         crate::cli::EntraCommands::CaReport => ca_report(),
+        crate::cli::EntraCommands::AppRegistrationAudit => app_registration_audit(),
+        crate::cli::EntraCommands::DirectoryAudit { limit } => directory_audit(limit),
     }
 }
 
@@ -138,4 +142,215 @@ fn ca_report() -> Result<()> {
 
     println!("\nTotal CA policies: {}", policies.len());
     Ok(())
+}
+
+/// Derived from Get-EntraAppRegistrationAudit.ps1 by AliAlame.
+/// Lists all app registrations with credential expiry awareness.
+/// Requires: Application.Read.All
+fn app_registration_audit() -> Result<()> {
+    // Fetch all app registrations; select fields that mirror the PS script output.
+    // Graph returns passwordCredentials and keyCredentials inline on the application object.
+    let apps = crate::runtime::graph::get_all(
+        "/applications\
+         ?$select=displayName,appId,signInAudience,\
+passwordCredentials,keyCredentials,createdDateTime\
+         &$top=999",
+    )?;
+
+    println!("{}", "Entra App Registration Audit".bold().underline());
+    println!(
+        "{:<45} {:<38} {:<22} {:<8} {:<8} {:<24}",
+        "DisplayName", "AppId", "SignInAudience", "Secrets", "Certs", "Created"
+    );
+    println!("{}", "-".repeat(150));
+
+    let mut expired = 0usize;
+    let mut expiring_soon = 0usize;
+
+    for app in &apps {
+        let name    = app["displayName"].as_str().unwrap_or("").to_string();
+        let app_id  = app["appId"].as_str().unwrap_or("").to_string();
+        let audience = app["signInAudience"].as_str().unwrap_or("").to_string();
+        let created  = app["createdDateTime"].as_str().unwrap_or("").to_string();
+
+        let secrets = app["passwordCredentials"]
+            .as_array()
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let certs = app["keyCredentials"]
+            .as_array()
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        // Warn on expiring/expired password credentials (mirrors PS script behaviour).
+        if let Some(creds) = app["passwordCredentials"].as_array() {
+            for cred in creds {
+                if let Some(exp_str) = cred["endDateTime"].as_str() {
+                    // ISO-8601 strings sort lexicographically; compare as strings for
+                    // a zero-dependency check (no chrono needed).
+                    let now_approx = chrono_approx_now();
+                    let in_30_days = chrono_approx_days(30);
+                    if exp_str < now_approx.as_str() {
+                        expired += 1;
+                    } else if exp_str < in_30_days.as_str() {
+                        expiring_soon += 1;
+                    }
+                }
+            }
+        }
+
+        println!(
+            "{:<45} {:<38} {:<22} {:<8} {:<8} {:<24}",
+            truncate(&name, 44),
+            app_id,
+            truncate(&audience, 21),
+            secrets,
+            certs,
+            &created[..created.len().min(24)],
+        );
+    }
+
+    println!("\nTotal app registrations : {}", apps.len());
+    if expired > 0 {
+        println!("{}", format!("Expired credentials     : {expired}").red());
+    }
+    if expiring_soon > 0 {
+        println!("{}", format!("Expiring within 30 days : {expiring_soon}").yellow());
+    }
+    Ok(())
+}
+
+/// Derived from Get-EntraDirectoryAudit.ps1 by AliAlame.
+/// Surfaces recent directory audit log entries.
+/// Requires: AuditLog.Read.All, Directory.Read.All
+fn directory_audit(limit: u32) -> Result<()> {
+    let top = limit.min(200); // Graph caps $top at 200 for auditLogs
+    let url = format!(
+        "/auditLogs/directoryAudits\
+         ?$select=activityDateTime,category,activityDisplayName,\
+initiatedBy,targetResources,result\
+         &$orderby=activityDateTime desc\
+         &$top={top}"
+    );
+
+    let entries = crate::runtime::graph::get_all(&url)?;
+
+    println!("{}", "Entra Directory Audit Log".bold().underline());
+    println!(
+        "{:<26} {:<18} {:<40} {:<40} {:<30} {:<8}",
+        "DateTime", "Category", "Activity", "InitiatorUPN", "TargetResource", "Result"
+    );
+    println!("{}", "-".repeat(166));
+
+    for e in &entries {
+        let dt       = e["activityDateTime"].as_str().unwrap_or("").to_string();
+        let category = e["category"].as_str().unwrap_or("").to_string();
+        let activity = e["activityDisplayName"].as_str().unwrap_or("").to_string();
+        let result   = e["result"].as_str().unwrap_or("").to_string();
+
+        // initiatedBy can be a user, app, or system principal
+        let initiator = e["initiatedBy"]["user"]["userPrincipalName"]
+            .as_str()
+            .or_else(|| e["initiatedBy"]["app"]["displayName"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // targetResources is an array; show only the first entry's displayName
+        let target = e["targetResources"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|t| t["displayName"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let colored_result = match result.as_str() {
+            "success" => result.green().to_string(),
+            "failure" => result.red().to_string(),
+            _         => result,
+        };
+
+        println!(
+            "{:<26} {:<18} {:<40} {:<40} {:<30} {:<8}",
+            &dt[..dt.len().min(26)],
+            truncate(&category, 17),
+            truncate(&activity, 39),
+            truncate(&initiator, 39),
+            truncate(&target, 29),
+            colored_result,
+        );
+    }
+
+    println!("\nEntries shown: {}", entries.len());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Truncate a string to at most `max` chars, appending '…' if needed.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        t.push('…');
+        t
+    }
+}
+
+/// Return an approximate ISO-8601 "now" string for lexicographic expiry comparison.
+/// Uses std::time only — no chrono dependency required.
+fn chrono_approx_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    unix_to_iso8601(secs)
+}
+
+/// Return an ISO-8601 string `days` days from now.
+fn chrono_approx_days(days: u64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + days * 86_400;
+    unix_to_iso8601(secs)
+}
+
+/// Minimal Unix-epoch → "YYYY-MM-DDTHH:MM:SSZ" formatter (no external crates).
+fn unix_to_iso8601(secs: u64) -> String {
+    let s = secs;
+    let days_since_epoch = s / 86_400;
+    let time_of_day = s % 86_400;
+    let hh = time_of_day / 3600;
+    let mm = (time_of_day % 3600) / 60;
+    let ss = time_of_day % 60;
+
+    // Gregorian calendar computation (sufficient for +/- 200 years from 1970)
+    let mut y = 1970u64;
+    let mut d = days_since_epoch;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if d < days_in_year { break; }
+        d -= days_in_year;
+        y += 1;
+    }
+    let month_days: [u64; 12] = [
+        31, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut mo = 0usize;
+    for &md in &month_days {
+        if d < md { break; }
+        d -= md;
+        mo += 1;
+    }
+    format!("{y:04}-{:02}-{:02}T{hh:02}:{mm:02}:{ss:02}Z", mo + 1, d + 1)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
