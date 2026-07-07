@@ -13,7 +13,8 @@
 // Endpoints used:
 //   GET /groups?$select=... (all groups, paginated via get_all)
 //   GET /groups/{id}/owners?$select=id   (owner count per group)
-//   GET /groups/{id}/members/$count      (member count; fallback to members page)
+//   GET /groups/{id}/members/$count      (member count; ConsistencyLevel: eventual)
+//                                        Fallback: /members?$top=100 array length
 
 use crate::cli::GroupCommands;
 use anyhow::Result;
@@ -112,7 +113,7 @@ onPremisesSyncEnabled,visibility\
         }
 
         // Member count — GET /groups/{id}/members/$count with ConsistencyLevel: eventual
-        // Falls back to page-1 count on failure (avoids halting the audit).
+        // Falls back to a 100-item page count on failure.
         let member_count = fetch_member_count(group_id).unwrap_or(0);
         if member_count == 0 {
             total_empty += 1;
@@ -285,32 +286,46 @@ fn fetch_owner_count(group_id: &str) -> Result<usize> {
         .unwrap_or(0))
 }
 
-/// Fetch the member count for a group using the $count shortcut.
-/// Falls back to fetching one page and reading the array length on failure.
-/// Endpoint: GET /groups/{id}/members/$count  (requires ConsistencyLevel: eventual)
+/// Fetch the true member count for a group.
+///
+/// Primary:  GET /groups/{id}/members/$count
+///           Requires `ConsistencyLevel: eventual` (via graph::get_count).
+///           Returns the actual integer count from Graph — accurate for groups
+///           of any size including those with > 100 members.
+///
+/// Fallback: GET /groups/{id}/members?$select=id&$top=100
+///           Used when the $count endpoint is unavailable (permissions, tenant
+///           settings, or transient Graph errors). Returns at most 100; groups
+///           larger than 100 will show "100+" in the Issues column rather than
+///           the exact number, but the audit will not halt.
 fn fetch_member_count(group_id: &str) -> Result<usize> {
-    // The $count endpoint returns a plain integer body — use graph::get on the
-    // members list and read the @odata.count or fall back to array length.
-    let path = format!(
-        "/groups/{}/members?$select=id&$top=1",
-        group_id
-    );
-    let resp = crate::runtime::graph::get(&path)?;
-    // If @odata.count is present Graph returns it when client requests it.
-    // Our graph::get does not send ConsistencyLevel so we use value array as proxy.
-    Ok(resp["value"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0))
+    let count_path = format!("/groups/{}/members/$count", group_id);
+    match crate::runtime::graph::get_count(&count_path) {
+        Ok(n) => Ok(n),
+        Err(_) => {
+            // Fallback: read first page (up to 100) and return array length.
+            // This means groups with >100 members show as 100 — acceptable
+            // as a degraded fallback; the Issues column will not show "empty".
+            let fallback_path = format!(
+                "/groups/{}/members?$select=id&$top=100",
+                group_id
+            );
+            let resp = crate::runtime::graph::get(&fallback_path)?;
+            Ok(resp["value"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0))
+        }
+    }
 }
 
-/// Truncate a string to at most `max` chars, appending '…' if needed.
+/// Truncate a string to at most `max` chars, appending '\u{2026}' if needed.
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('\u{2026}'); // '…'
+        t.push('\u{2026}');
         t
     }
 }

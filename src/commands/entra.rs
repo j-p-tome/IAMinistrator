@@ -18,13 +18,13 @@ use colored::Colorize;
 
 pub fn handle(action: crate::cli::EntraCommands) -> Result<()> {
     match action {
-        crate::cli::EntraCommands::AdminRoles              => admin_roles(),
-        crate::cli::EntraCommands::GuestAudit              => crate::commands::user::guest_audit(),
-        crate::cli::EntraCommands::RiskyUsers              => crate::commands::user::risky_users_report(),
-        crate::cli::EntraCommands::CaReport                => ca_report(),
-        crate::cli::EntraCommands::AppRegistrationAudit    => app_registration_audit(),
-        crate::cli::EntraCommands::DirectoryAudit { limit } => directory_audit(limit),
-        crate::cli::EntraCommands::GroupAudit              => crate::commands::group::run_audit(),
+        crate::cli::EntraCommands::AdminRoles                        => admin_roles(),
+        crate::cli::EntraCommands::GuestAudit { stale_days }        => crate::commands::user::guest_audit(stale_days),
+        crate::cli::EntraCommands::RiskyUsers                        => crate::commands::user::risky_users_report(),
+        crate::cli::EntraCommands::CaReport                          => ca_report(),
+        crate::cli::EntraCommands::AppRegistrationAudit              => app_registration_audit(),
+        crate::cli::EntraCommands::DirectoryAudit { limit }          => directory_audit(limit),
+        crate::cli::EntraCommands::GroupAudit                        => crate::commands::group::run_audit(),
     }
 }
 
@@ -123,8 +123,8 @@ passwordCredentials,keyCredentials,createdDateTime\
         if let Some(creds) = app["passwordCredentials"].as_array() {
             for cred in creds {
                 if let Some(exp_str) = cred["endDateTime"].as_str() {
-                    let now_approx    = chrono_approx_now();
-                    let in_30_days    = chrono_approx_days(30);
+                    let now_approx = chrono_approx_now();
+                    let in_30_days = chrono_approx_days(30);
                     if exp_str < now_approx.as_str() {
                         expired += 1;
                     } else if exp_str < in_30_days.as_str() {

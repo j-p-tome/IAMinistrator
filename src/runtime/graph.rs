@@ -38,6 +38,61 @@ pub fn get(path: &str) -> Result<Value> {
     Ok(json)
 }
 
+/// GET {base}{path} with an additional `ConsistencyLevel: eventual` header.
+///
+/// Required for `$count` and advanced OData queries on directory objects.
+/// Returns the raw JSON `Value`; the caller is responsible for parsing the
+/// response body (which may be a plain integer for `/$count` endpoints).
+pub fn get_with_consistency(path: &str) -> Result<Value> {
+    let token = crate::runtime::auth::get_token()?;
+    let url = format!("{}{}", GRAPH_BASE, path);
+
+    let res = client()?
+        .get(&url)
+        .bearer_auth(&token)
+        .header("ConsistencyLevel", "eventual")
+        .send()
+        .context("Graph GET (ConsistencyLevel: eventual) request failed")?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().unwrap_or_default();
+        anyhow::bail!(
+            "Graph GET (ConsistencyLevel) failed: {} \u{2013} {}",
+            status,
+            body.trim()
+        );
+    }
+
+    // `/$count` endpoints return a plain integer (e.g. `42`), not a JSON object.
+    // Parse the body text first; if it is a bare integer wrap it in a JSON number
+    // so callers can use a uniform `Value` interface.
+    let body_text = res.text().context("Failed to read Graph response body")?;
+    let trimmed = body_text.trim();
+    if let Ok(n) = trimmed.parse::<u64>() {
+        return Ok(Value::Number(n.into()));
+    }
+    let json: Value =
+        serde_json::from_str(trimmed).context("Failed to parse Graph consistency response JSON")?;
+    Ok(json)
+}
+
+/// Fetch the integer count for a `/$count` Graph endpoint.
+///
+/// Uses `ConsistencyLevel: eventual` which is required for `$count` on
+/// directory objects (users, group members, etc.).
+///
+/// # Example
+/// ```ignore
+/// let n = graph::get_count("/groups/{id}/members/$count")?;
+/// ```
+pub fn get_count(path: &str) -> Result<usize> {
+    let val = get_with_consistency(path)?;
+    val.as_u64()
+        .map(|n| n as usize)
+        .ok_or_else(|| anyhow::anyhow!("Graph $count endpoint did not return an integer: {:?}", val))
+}
+
 /// POST {base}{path} with a JSON body.
 pub fn post(path: &str, body: &Value) -> Result<Value> {
     let token = crate::runtime::auth::get_token()?;

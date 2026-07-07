@@ -10,6 +10,7 @@
 //
 // Required Microsoft Graph permissions per function:
 //   guest_audit:        User.Read.All, AuditLog.Read.All, Directory.Read.All
+//   guest_audit (stale-days path): +AuditLog.Read.All (signInActivity field)
 //   license_report:     Organization.Read.All, User.Read.All, Directory.Read.All
 //   risky_users_report: IdentityRiskyUser.Read.All
 //   get_user_risk (existing): IdentityRiskyUser.Read.All
@@ -56,11 +57,11 @@ impl UserType {
 
 /// A lightweight, parsed user row shared between guest audit and license report.
 pub struct UserRow {
-    pub display_name:   String,
-    pub upn:            String,
-    pub mail:           String,
-    pub created:        String,
-    pub user_type:      UserType,
+    pub display_name:    String,
+    pub upn:             String,
+    pub mail:            String,
+    pub created:         String,
+    pub user_type:       UserType,
     pub account_enabled: bool,
 }
 
@@ -84,12 +85,12 @@ pub fn parse_user_row(u: &serde_json::Value) -> UserRow {
 
 pub fn handle(action: UserCommands) -> Result<()> {
     match action {
-        UserCommands::Get { upn }    => get_user(&upn),
-        UserCommands::Create { file } => create_user(&file),
-        UserCommands::RiskInfo { upn } => get_user_risk(&upn),
-        UserCommands::GuestAudit     => guest_audit(),
-        UserCommands::LicenseReport  => license_report(),
-        UserCommands::RiskReport     => risky_users_report(),
+        UserCommands::Get { upn }              => get_user(&upn),
+        UserCommands::Create { file }          => create_user(&file),
+        UserCommands::RiskInfo { upn }         => get_user_risk(&upn),
+        UserCommands::GuestAudit { stale_days } => guest_audit(stale_days),
+        UserCommands::LicenseReport            => license_report(),
+        UserCommands::RiskReport               => risky_users_report(),
     }
 }
 
@@ -196,39 +197,73 @@ fn get_user_risk(upn: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Derived from Get-EntraGuestUserAudit.ps1 by AliAlame.
 // Requires: User.Read.All, AuditLog.Read.All, Directory.Read.All
+// When stale_days is Some(n): also requires AuditLog.Read.All for signInActivity.
 //
 // Endpoints:
 //   GET /users?$filter=userType eq 'Guest'
 //             &$select=id,userPrincipalName,displayName,mail,createdDateTime,
 //                       externalUserState,accountEnabled,userType
-//   (signInActivity requires AuditLog.Read.All and is returned inline when
-//    the $select list includes it; Graph v1.0 only.)
+//             [+ signInActivity when stale_days is set]
+//
+// signInActivity.lastSignInDateTime is only returned when explicitly $select-ed
+// and requires AuditLog.Read.All. It is omitted when --stale-days is not given
+// so the command works without that permission in the base case.
 
-pub fn guest_audit() -> Result<()> {
+pub fn guest_audit(stale_days: Option<u64>) -> Result<()> {
     println!("{}", "Entra Guest User Audit".bold().underline());
-    println!("Derived from Get-EntraGuestUserAudit.ps1 (IntuneToolKit by AliAlame)\n");
+    println!("Derived from Get-EntraGuestUserAudit.ps1 (IntuneToolKit by AliAlame)");
 
-    let guests = graph::get_all(
-        "/users\
-         ?$filter=userType eq 'Guest'\
-         &$select=id,userPrincipalName,displayName,mail,createdDateTime,\
-externalUserState,accountEnabled,userType\
-         &$top=999",
-    )?;
+    // Compute the stale cutoff ISO-8601 string once (reused per-row below).
+    let stale_cutoff: Option<String> = stale_days.map(|d| approx_days_ago_iso8601(d));
+    if let Some(d) = stale_days {
+        println!(
+            "{} guests with no sign-in in the last {} days will be flagged as stale\n",
+            "Note:".yellow().bold(),
+            d
+        );
+    } else {
+        println!();
+    }
 
-    println!(
-        "{:<50} {:<35} {:<24} {:<8} {:<20} {}",
-        "UPN", "Mail", "Created", "Enabled", "InviteState", "UserType"
+    // Build the $select list — include signInActivity only when --stale-days is set.
+    // signInActivity is a complex type; it is included as a navigation property
+    // and must be explicitly requested. Requires AuditLog.Read.All.
+    let select_fields = if stale_cutoff.is_some() {
+        "id,userPrincipalName,displayName,mail,createdDateTime,\
+externalUserState,accountEnabled,userType,signInActivity"
+    } else {
+        "id,userPrincipalName,displayName,mail,createdDateTime,\
+externalUserState,accountEnabled,userType"
+    };
+
+    let url = format!(
+        "/users?$filter=userType eq 'Guest'&$select={select_fields}&$top=999"
     );
-    println!("{}", "-".repeat(145));
+    let guests = graph::get_all(&url)?;
+
+    // Column header — add LastSignIn column when --stale-days is active.
+    if stale_cutoff.is_some() {
+        println!(
+            "{:<46} {:<32} {:<24} {:<8} {:<20} {:<8} {}",
+            "UPN", "Mail", "Created", "Enabled", "InviteState", "Stale", "LastSignIn"
+        );
+        println!("{}", "-".repeat(160));
+    } else {
+        println!(
+            "{:<50} {:<35} {:<24} {:<8} {:<20} {}",
+            "UPN", "Mail", "Created", "Enabled", "InviteState", "UserType"
+        );
+        println!("{}", "-".repeat(145));
+    }
 
     let mut disabled_count  = 0usize;
     let mut pending_count   = 0usize;
     let mut never_upn_count = 0usize;
+    let mut stale_count     = 0usize;
 
     for u in &guests {
-        let row           = parse_user_row(u);
-        let invite_state  = u["externalUserState"].as_str().unwrap_or("").to_owned();
+        let row          = parse_user_row(u);
+        let invite_state = u["externalUserState"].as_str().unwrap_or("").to_owned();
         let created_short = &row.created[..row.created.len().min(24)];
 
         if !row.account_enabled {
@@ -237,7 +272,6 @@ externalUserState,accountEnabled,userType\
         if invite_state.eq_ignore_ascii_case("PendingAcceptance") {
             pending_count += 1;
         }
-        // Guests who have never signed in tend to keep the invite-format UPN
         if row.upn.contains("#EXT#") {
             never_upn_count += 1;
         }
@@ -249,23 +283,63 @@ externalUserState,accountEnabled,userType\
         };
 
         let invite_colored = match invite_state.as_str() {
-            "Accepted"           => invite_state.green().to_string(),
-            "PendingAcceptance"  => invite_state.yellow().to_string(),
-            _                    => invite_state.clone(),
+            "Accepted"          => invite_state.green().to_string(),
+            "PendingAcceptance" => invite_state.yellow().to_string(),
+            _                   => invite_state.clone(),
         };
 
-        println!(
-            "{:<50} {:<35} {:<24} {:<8} {:<20} {}",
-            truncate_str(&row.upn, 49),
-            truncate_str(&row.mail, 34),
-            created_short,
-            enabled_str,
-            invite_colored,
-            row.user_type.label(),
-        );
+        if let Some(ref cutoff) = stale_cutoff {
+            // Extract lastSignInDateTime from signInActivity complex type.
+            // Graph returns: { "signInActivity": { "lastSignInDateTime": "...", ... } }
+            let last_signin = u["signInActivity"]["lastSignInDateTime"]
+                .as_str()
+                .unwrap_or("");
+
+            // A guest is stale if:
+            //   - lastSignInDateTime is present and older than the cutoff, OR
+            //   - lastSignInDateTime is absent (never signed in)
+            let is_stale = last_signin.is_empty() || last_signin < cutoff.as_str();
+            if is_stale {
+                stale_count += 1;
+            }
+
+            let stale_str = if is_stale {
+                "YES".red().to_string()
+            } else {
+                "no".dimmed().to_string()
+            };
+
+            let signin_display = if last_signin.is_empty() {
+                "never".yellow().to_string()
+            } else {
+                last_signin[..last_signin.len().min(24)].to_string()
+            };
+
+            println!(
+                "{:<46} {:<32} {:<24} {:<8} {:<20} {:<8} {}",
+                truncate_str(&row.upn, 45),
+                truncate_str(&row.mail, 31),
+                created_short,
+                enabled_str,
+                invite_colored,
+                stale_str,
+                signin_display,
+            );
+        } else {
+            println!(
+                "{:<50} {:<35} {:<24} {:<8} {:<20} {}",
+                truncate_str(&row.upn, 49),
+                truncate_str(&row.mail, 34),
+                created_short,
+                enabled_str,
+                invite_colored,
+                row.user_type.label(),
+            );
+        }
     }
 
-    println!("{}", "-".repeat(145));
+    let sep_width = if stale_cutoff.is_some() { 160 } else { 145 };
+    println!("{}", "-".repeat(sep_width));
     println!("\nTotal guest users     : {}", guests.len());
     if disabled_count > 0 {
         println!("{}", format!("Disabled accounts     : {disabled_count}").red());
@@ -274,6 +348,16 @@ externalUserState,accountEnabled,userType\
         println!("{}", format!("Pending invitations   : {pending_count}").yellow());
     }
     println!("EXT# UPNs (no rename) : {}", never_upn_count);
+    if let Some(d) = stale_days {
+        if stale_count > 0 {
+            println!(
+                "{}",
+                format!("Stale guests (>{d}d)   : {stale_count}").red()
+            );
+        } else {
+            println!("Stale guests (>{d}d)   : 0");
+        }
+    }
 
     println!(
         "\n{}",
@@ -281,7 +365,7 @@ externalUserState,accountEnabled,userType\
     );
     println!(
         "{}",
-        "  - Add signInActivity field to detect never-signed-in / stale guests (AuditLog.Read.All)".dimmed()
+        "  - --inactive-days N flag to surface guests inactive beyond threshold (uses signInActivity)".dimmed()
     );
     println!(
         "{}",
@@ -289,7 +373,7 @@ externalUserState,accountEnabled,userType\
     );
     println!(
         "{}",
-        "  - --inactive-days N flag to surface guests inactive beyond threshold".dimmed()
+        "  - Export stale guest list to CSV for remediation workflow".dimmed()
     );
 
     Ok(())
@@ -353,7 +437,7 @@ pub fn license_report() -> Result<()> {
         total_purchased += purch;
         total_consumed  += cons;
 
-        let util_str = format!("{util}%");
+        let util_str  = format!("{util}%");
         let avail_str = avail.to_string();
 
         let colored_util = if util >= 95 {
@@ -400,17 +484,16 @@ pub fn license_report() -> Result<()> {
          &$top=999",
     )?;
 
-    let mut licensed_count        = 0usize;
-    let mut unlicensed_count      = 0usize;
-    let mut disabled_licensed     = 0usize;
-    let mut guest_licensed        = 0usize;
-    let mut wasted_license_seats  = 0usize;
+    let mut licensed_count       = 0usize;
+    let mut unlicensed_count     = 0usize;
+    let mut disabled_licensed    = 0usize;
+    let mut guest_licensed       = 0usize;
+    let mut wasted_license_seats = 0usize;
 
-    // Collect disabled-with-license details for display
     let mut disabled_rows: Vec<(String, String)> = Vec::new();
 
     for u in &users {
-        let row = parse_user_row(u);
+        let row      = parse_user_row(u);
         let licenses = u["assignedLicenses"].as_array().cloned().unwrap_or_default();
         let lic_count = licenses.len();
 
@@ -456,10 +539,7 @@ pub fn license_report() -> Result<()> {
             println!("    {} {}", upn.yellow(), format!("| {lics}").dimmed());
         }
         if disabled_rows.len() > 15 {
-            println!(
-                "    … and {} more",
-                disabled_rows.len() - 15
-            );
+            println!("    … and {} more", disabled_rows.len() - 15);
         }
     } else {
         println!("  Disabled with licenses     : 0");
@@ -620,7 +700,7 @@ pub fn risky_users_report() -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Truncate a string to at most `max` chars, appending '…' if needed.
+/// Truncate a string to at most `max` chars, appending '\u{2026}' if needed.
 fn truncate_str(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -633,7 +713,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 
 /// Return ISO-8601 string for `days` days ago.
 /// Uses std::time only — no chrono dependency.
-fn approx_days_ago_iso8601(days: u64) -> String {
+pub fn approx_days_ago_iso8601(days: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -645,7 +725,7 @@ fn approx_days_ago_iso8601(days: u64) -> String {
 
 fn unix_to_iso8601(secs: u64) -> String {
     let days_since_epoch = secs / 86_400;
-    let time_of_day = secs % 86_400;
+    let time_of_day      = secs % 86_400;
     let hh = time_of_day / 3600;
     let mm = (time_of_day % 3600) / 60;
     let ss = time_of_day % 60;

@@ -31,7 +31,12 @@ pub enum UserCommands {
     RiskInfo { upn: String },
     /// Audit all guest/external users: sign-in activity, invitation state, stale flags.
     /// Requires: User.Read.All, AuditLog.Read.All, Directory.Read.All
-    GuestAudit,
+    GuestAudit {
+        /// Flag guests whose last sign-in is older than N days (requires signInActivity field).
+        /// Requires AuditLog.Read.All. Omit to skip stale detection.
+        #[arg(long, value_name = "DAYS")]
+        stale_days: Option<u64>,
+    },
     /// License utilization report: SKU overview, disabled accounts consuming licenses.
     /// Requires: Organization.Read.All, User.Read.All, Directory.Read.All
     LicenseReport,
@@ -151,7 +156,12 @@ pub enum EntraCommands {
     AdminRoles,
     /// Audit guest users [derived from Get-EntraGuestUserAudit.ps1 by AliAlame]
     /// Compatibility alias — primary implementation lives in `iam user guest-audit`.
-    GuestAudit,
+    GuestAudit {
+        /// Flag guests whose last sign-in is older than N days.
+        /// Requires AuditLog.Read.All. Omit to skip stale detection.
+        #[arg(long, value_name = "DAYS")]
+        stale_days: Option<u64>,
+    },
     /// List risky users [derived from Get-EntraRiskyUsers.ps1 by AliAlame]
     /// Compatibility alias — primary implementation lives in `iam user risk-report`.
     RiskyUsers,
