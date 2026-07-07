@@ -5,11 +5,12 @@
 // Derived from the following IntuneToolKit scripts by AliAlame
 // (https://github.com/CYEBRSYSTEM-AliAlame/IntuneToolKit):
 //   - Get-EntraAdminRoleReport.ps1      → admin_roles()
-//   - Get-EntraGuestUserAudit.ps1       → guest_audit()
-//   - Get-EntraRiskyUsers.ps1           → risky_users()
+//   - Get-EntraGuestUserAudit.ps1       → guest_audit()       [delegates to user::guest_audit]
+//   - Get-EntraRiskyUsers.ps1           → risky_users()       [delegates to user::risky_users_report]
 //   - Get-EntraCAReport.ps1             → ca_report()
 //   - Get-EntraAppRegistrationAudit.ps1 → app_registration_audit()
 //   - Get-EntraDirectoryAudit.ps1       → directory_audit()
+//   - Get-EntraGroupAudit.ps1           → group_audit()       [delegates to group::run_audit]
 // Translated and adapted for native Rust / Microsoft Graph REST API.
 
 use anyhow::Result;
@@ -17,12 +18,13 @@ use colored::Colorize;
 
 pub fn handle(action: crate::cli::EntraCommands) -> Result<()> {
     match action {
-        crate::cli::EntraCommands::AdminRoles => admin_roles(),
-        crate::cli::EntraCommands::GuestAudit => guest_audit(),
-        crate::cli::EntraCommands::RiskyUsers => risky_users(),
-        crate::cli::EntraCommands::CaReport => ca_report(),
-        crate::cli::EntraCommands::AppRegistrationAudit => app_registration_audit(),
+        crate::cli::EntraCommands::AdminRoles              => admin_roles(),
+        crate::cli::EntraCommands::GuestAudit              => crate::commands::user::guest_audit(),
+        crate::cli::EntraCommands::RiskyUsers              => crate::commands::user::risky_users_report(),
+        crate::cli::EntraCommands::CaReport                => ca_report(),
+        crate::cli::EntraCommands::AppRegistrationAudit    => app_registration_audit(),
         crate::cli::EntraCommands::DirectoryAudit { limit } => directory_audit(limit),
+        crate::cli::EntraCommands::GroupAudit              => crate::commands::group::run_audit(),
     }
 }
 
@@ -44,74 +46,12 @@ fn admin_roles() -> Result<()> {
 
     for a in &assignments {
         let principal = a["principalId"].as_str().unwrap_or("").to_string();
-        let role_def = a["roleDefinitionId"].as_str().unwrap_or("").to_string();
-        let scope = a["directoryScopeId"].as_str().unwrap_or("").to_string();
+        let role_def  = a["roleDefinitionId"].as_str().unwrap_or("").to_string();
+        let scope     = a["directoryScopeId"].as_str().unwrap_or("").to_string();
         println!("{:<40} {:<50} {:<20}", principal, role_def, scope);
     }
 
     println!("\nTotal assignments: {}", assignments.len());
-    Ok(())
-}
-
-/// Derived from Get-EntraGuestUserAudit.ps1 by AliAlame.
-/// Requires: User.Read.All
-fn guest_audit() -> Result<()> {
-    let users = crate::runtime::graph::get_all(
-        "/users?$filter=userType eq 'Guest'\
-         &$select=displayName,mail,userPrincipalName,createdDateTime\
-         &$top=999",
-    )?;
-
-    println!("{}", "Entra Guest User Audit".bold().underline());
-    println!(
-        "{:<50} {:<45} {:<24}",
-        "UPN", "Mail", "Created"
-    );
-    println!("{}", "-".repeat(120));
-
-    for u in &users {
-        let upn = u["userPrincipalName"].as_str().unwrap_or("").to_string();
-        let mail = u["mail"].as_str().unwrap_or("").to_string();
-        let created = u["createdDateTime"].as_str().unwrap_or("").to_string();
-        println!("{:<50} {:<45} {:<24}", upn, mail, created);
-    }
-
-    println!("\nTotal guest users: {}", users.len());
-    Ok(())
-}
-
-/// Derived from Get-EntraRiskyUsers.ps1 by AliAlame.
-/// Requires: IdentityRiskyUser.Read.All
-fn risky_users() -> Result<()> {
-    let users = crate::runtime::graph::get_all(
-        "/identityProtection/riskyUsers\
-         ?$filter=riskLevel ne 'none' and riskState ne 'dismissed'\
-         &$orderby=riskLevel desc&$top=999",
-    )?;
-
-    println!("{}", "Entra Risky Users".bold().underline());
-    println!(
-        "{:<50} {:<10} {:<18} {:<26}",
-        "UPN", "RiskLevel", "RiskState", "LastUpdated"
-    );
-    println!("{}", "-".repeat(106));
-
-    for u in &users {
-        let upn = u["userPrincipalName"].as_str().unwrap_or("").to_string();
-        let level = u["riskLevel"].as_str().unwrap_or("").to_string();
-        let state = u["riskState"].as_str().unwrap_or("").to_string();
-        let updated = u["riskLastUpdatedDateTime"].as_str().unwrap_or("").to_string();
-
-        let colored_level = match level.as_str() {
-            "high"   => level.red().to_string(),
-            "medium" => level.yellow().to_string(),
-            "low"    => level.normal().to_string(),
-            _        => level,
-        };
-        println!("{:<50} {:<10} {:<18} {:<26}", upn, colored_level, state, updated);
-    }
-
-    println!("\nTotal risky users: {}", users.len());
     Ok(())
 }
 
@@ -129,13 +69,13 @@ fn ca_report() -> Result<()> {
     println!("{}", "-".repeat(68));
 
     for p in &policies {
-        let name = p["displayName"].as_str().unwrap_or("").to_string();
+        let name  = p["displayName"].as_str().unwrap_or("").to_string();
         let state = p["state"].as_str().unwrap_or("").to_string();
         let colored_state = match state.as_str() {
-            "enabled" => state.green().to_string(),
-            "disabled" => state.red().to_string(),
+            "enabled"                          => state.green().to_string(),
+            "disabled"                         => state.red().to_string(),
             "enabledForReportingButNotEnforced" => state.yellow().to_string(),
-            _ => state,
+            _                                  => state,
         };
         println!("{:<55} {:<12}", name, colored_state);
     }
@@ -148,8 +88,6 @@ fn ca_report() -> Result<()> {
 /// Lists all app registrations with credential expiry awareness.
 /// Requires: Application.Read.All
 fn app_registration_audit() -> Result<()> {
-    // Fetch all app registrations; select fields that mirror the PS script output.
-    // Graph returns passwordCredentials and keyCredentials inline on the application object.
     let apps = crate::runtime::graph::get_all(
         "/applications\
          ?$select=displayName,appId,signInAudience,\
@@ -168,8 +106,8 @@ passwordCredentials,keyCredentials,createdDateTime\
     let mut expiring_soon = 0usize;
 
     for app in &apps {
-        let name    = app["displayName"].as_str().unwrap_or("").to_string();
-        let app_id  = app["appId"].as_str().unwrap_or("").to_string();
+        let name     = app["displayName"].as_str().unwrap_or("").to_string();
+        let app_id   = app["appId"].as_str().unwrap_or("").to_string();
         let audience = app["signInAudience"].as_str().unwrap_or("").to_string();
         let created  = app["createdDateTime"].as_str().unwrap_or("").to_string();
 
@@ -182,14 +120,11 @@ passwordCredentials,keyCredentials,createdDateTime\
             .map(|v| v.len())
             .unwrap_or(0);
 
-        // Warn on expiring/expired password credentials (mirrors PS script behaviour).
         if let Some(creds) = app["passwordCredentials"].as_array() {
             for cred in creds {
                 if let Some(exp_str) = cred["endDateTime"].as_str() {
-                    // ISO-8601 strings sort lexicographically; compare as strings for
-                    // a zero-dependency check (no chrono needed).
-                    let now_approx = chrono_approx_now();
-                    let in_30_days = chrono_approx_days(30);
+                    let now_approx    = chrono_approx_now();
+                    let in_30_days    = chrono_approx_days(30);
                     if exp_str < now_approx.as_str() {
                         expired += 1;
                     } else if exp_str < in_30_days.as_str() {
@@ -224,7 +159,7 @@ passwordCredentials,keyCredentials,createdDateTime\
 /// Surfaces recent directory audit log entries.
 /// Requires: AuditLog.Read.All, Directory.Read.All
 fn directory_audit(limit: u32) -> Result<()> {
-    let top = limit.min(200); // Graph caps $top at 200 for auditLogs
+    let top = limit.min(200);
     let url = format!(
         "/auditLogs/directoryAudits\
          ?$select=activityDateTime,category,activityDisplayName,\
@@ -248,14 +183,12 @@ initiatedBy,targetResources,result\
         let activity = e["activityDisplayName"].as_str().unwrap_or("").to_string();
         let result   = e["result"].as_str().unwrap_or("").to_string();
 
-        // initiatedBy can be a user, app, or system principal
         let initiator = e["initiatedBy"]["user"]["userPrincipalName"]
             .as_str()
             .or_else(|| e["initiatedBy"]["app"]["displayName"].as_str())
             .unwrap_or("")
             .to_string();
 
-        // targetResources is an array; show only the first entry's displayName
         let target = e["targetResources"]
             .as_array()
             .and_then(|arr| arr.first())
@@ -285,22 +218,19 @@ initiatedBy,targetResources,result\
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers (kept local to entra.rs; identical copies exist in user.rs)
 // ---------------------------------------------------------------------------
 
-/// Truncate a string to at most `max` chars, appending '…' if needed.
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('…');
+        t.push('\u{2026}');
         t
     }
 }
 
-/// Return an approximate ISO-8601 "now" string for lexicographic expiry comparison.
-/// Uses std::time only — no chrono dependency required.
 fn chrono_approx_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -310,7 +240,6 @@ fn chrono_approx_now() -> String {
     unix_to_iso8601(secs)
 }
 
-/// Return an ISO-8601 string `days` days from now.
 fn chrono_approx_days(days: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -321,7 +250,6 @@ fn chrono_approx_days(days: u64) -> String {
     unix_to_iso8601(secs)
 }
 
-/// Minimal Unix-epoch → "YYYY-MM-DDTHH:MM:SSZ" formatter (no external crates).
 fn unix_to_iso8601(secs: u64) -> String {
     let s = secs;
     let days_since_epoch = s / 86_400;
@@ -330,7 +258,6 @@ fn unix_to_iso8601(secs: u64) -> String {
     let mm = (time_of_day % 3600) / 60;
     let ss = time_of_day % 60;
 
-    // Gregorian calendar computation (sufficient for +/- 200 years from 1970)
     let mut y = 1970u64;
     let mut d = days_since_epoch;
     loop {

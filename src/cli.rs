@@ -29,6 +29,15 @@ pub enum UserCommands {
     Create { #[arg(short, long)] file: String },
     /// Show Identity Protection risk state, last risky sign-in date, and last risky sign-in IP.
     RiskInfo { upn: String },
+    /// Audit all guest/external users: sign-in activity, invitation state, stale flags.
+    /// Requires: User.Read.All, AuditLog.Read.All, Directory.Read.All
+    GuestAudit,
+    /// License utilization report: SKU overview, disabled accounts consuming licenses.
+    /// Requires: Organization.Read.All, User.Read.All, Directory.Read.All
+    LicenseReport,
+    /// Risky users and recent risk detections from Entra ID Protection.
+    /// Requires: IdentityRiskyUser.Read.All
+    RiskReport,
 }
 
 #[derive(Subcommand)]
@@ -36,6 +45,10 @@ pub enum GroupCommands {
     Diff { user1: String, user2: String },
     Memberships { upn: String },
     Add { upn: String, group: String },
+    /// Bulk group health audit: type classification, owner count, member count, issue flags.
+    /// Derived from Get-EntraGroupAudit.ps1 by AliAlame.
+    /// Requires: Directory.Read.All, Group.Read.All, GroupMember.Read.All
+    Audit,
 }
 
 #[derive(Subcommand)]
@@ -137,8 +150,10 @@ pub enum EntraCommands {
     /// List admin role assignments [derived from Get-EntraAdminRoleReport.ps1 by AliAlame]
     AdminRoles,
     /// Audit guest users [derived from Get-EntraGuestUserAudit.ps1 by AliAlame]
+    /// Compatibility alias — primary implementation lives in `iam user guest-audit`.
     GuestAudit,
     /// List risky users [derived from Get-EntraRiskyUsers.ps1 by AliAlame]
+    /// Compatibility alias — primary implementation lives in `iam user risk-report`.
     RiskyUsers,
     /// Conditional Access policy report [derived from Get-EntraCAReport.ps1 by AliAlame]
     CaReport,
@@ -153,6 +168,10 @@ pub enum EntraCommands {
         #[arg(long, default_value = "50", help = "Number of audit entries to fetch (max 200)")]
         limit: u32,
     },
+    /// Bulk group health audit (alias for `iam group audit`).
+    /// [derived from Get-EntraGroupAudit.ps1 by AliAlame]
+    /// Requires: Directory.Read.All, Group.Read.All, GroupMember.Read.All
+    GroupAudit,
 }
 
 /// Rust-native Intune device management commands.
